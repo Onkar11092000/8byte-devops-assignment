@@ -1,10 +1,12 @@
+```groovy
 pipeline {
     agent any
 
     environment {
         IMAGE_NAME = "eightbyte-app"
-        EC2_USER = "ubuntu"
-        EC2_HOST = "13.232.70.193"
+        CONTAINER_NAME = "eightbyte-app"
+        APP_PORT = "3000"
+        APP_URL = "http://localhost:3000/health"
     }
 
     stages {
@@ -12,31 +14,83 @@ pipeline {
         stage('Test') {
             steps {
                 dir('app') {
-                    bat 'npm.cmd test -- --runInBand'
+                    sh '''
+                        set -e
+                        echo "Node: $(node --version)"
+                        echo "NPM: $(npm --version)"
+
+                        npm ci --no-audit --no-fund
+                        npm test -- --runInBand
+                    '''
                 }
             }
         }
 
         stage('Docker Build') {
             steps {
-                bat 'docker build -t %IMAGE_NAME%:latest app'
+                sh '''
+                    set -e
+                    docker build -t ${IMAGE_NAME}:latest ./app
+                    docker images ${IMAGE_NAME}:latest
+                '''
             }
         }
 
         stage('Deploy to EC2') {
             steps {
-                bat '''
-                docker save %IMAGE_NAME%:latest -o eightbyte-app.tar
-                scp -i terraform\\ssh_key.pem eightbyte-app.tar %EC2_USER%@%EC2_HOST%:/home/ubuntu/
-                ssh -i terraform\\ssh_key.pem %EC2_USER%@%EC2_HOST% "sudo docker load -i /home/ubuntu/eightbyte-app.tar && sudo docker rm -f eightbyte-app || true && sudo docker run -d --name eightbyte-app -p 3000:3000 eightbyte-app:latest"
+                sh '''
+                    set -e
+
+                    docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
+
+                    docker run -d \
+                      --name ${CONTAINER_NAME} \
+                      -p ${APP_PORT}:${APP_PORT} \
+                      ${IMAGE_NAME}:latest
+
+                    sleep 5
+
+                    docker ps --filter "name=${CONTAINER_NAME}"
+                    docker logs ${CONTAINER_NAME} --tail 20
                 '''
             }
         }
 
         stage('Health Check') {
             steps {
-                bat 'curl http://%EC2_HOST%:3000/health'
+                sh '''
+                    set -e
+
+                    echo "Checking application health..."
+
+                    for i in 1 2 3 4 5; do
+                        if curl -fsS ${APP_URL}; then
+                            echo ""
+                            echo "Application is healthy!"
+                            exit 0
+                        fi
+
+                        echo "Health check failed. Retrying..."
+                        sleep 3
+                    done
+
+                    echo "Application health check failed."
+                    docker logs ${CONTAINER_NAME} --tail 50
+                    exit 1
+                '''
             }
         }
     }
+
+    post {
+        success {
+            echo '8Byte CI/CD pipeline completed successfully!'
+        }
+
+        failure {
+            echo '8Byte CI/CD pipeline failed!'
+            sh 'docker logs ${CONTAINER_NAME} --tail 50 || true'
+        }
+    }
 }
+```
