@@ -58,7 +58,7 @@ resource "aws_security_group" "app" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["59.152.120.135/32"]
+    cidr_blocks = [var.admin_ip]
   }
 
   egress {

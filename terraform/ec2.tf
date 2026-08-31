@@ -1,4 +1,29 @@
 # ---------------------------------------------------------
+# SSH Key Pair
+# ---------------------------------------------------------
+
+resource "tls_private_key" "ssh_key" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+resource "aws_key_pair" "ssh_key" {
+  key_name   = "ssh_key"
+  public_key = tls_private_key.ssh_key.public_key_openssh
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-ssh-key"
+  }
+}
+
+# Save private key locally
+resource "local_sensitive_file" "ssh_private_key" {
+  filename        = "${path.module}/ssh_key.pem"
+  content         = tls_private_key.ssh_key.private_key_pem
+  file_permission = "0600"
+}
+
+# ---------------------------------------------------------
 # EC2 Application Server
 # ---------------------------------------------------------
 
@@ -6,9 +31,6 @@ resource "aws_instance" "app" {
   ami           = data.aws_ami.ubuntu.id
   instance_type = var.instance_type
 
-  # No NAT Gateway required.
-  # EC2 is placed in the public subnet so it can bootstrap
-  # itself using the Internet Gateway.
   subnet_id = aws_subnet.public.id
 
   vpc_security_group_ids = [
@@ -16,6 +38,9 @@ resource "aws_instance" "app" {
   ]
 
   associate_public_ip_address = true
+
+  # Attach SSH key pair
+  key_name = aws_key_pair.ssh_key.key_name
 
   root_block_device {
     volume_type = "gp3"
@@ -30,23 +55,14 @@ resource "aws_instance" "app" {
 
               exec > >(tee /var/log/8byte-bootstrap.log | logger -t 8byte-bootstrap -s 2>/dev/console) 2>&1
 
-              echo "Starting 8Byte application bootstrap..."
-
-              # -------------------------------------------------
-              # Install required packages
-              # -------------------------------------------------
+              echo "Starting 8Byte EC2 bootstrap"
 
               apt-get update -y
 
               apt-get install -y \
                 ca-certificates \
                 curl \
-                git \
                 gnupg
-
-              # -------------------------------------------------
-              # Install Docker
-              # -------------------------------------------------
 
               install -m 0755 -d /etc/apt/keyrings
 
@@ -72,41 +88,13 @@ resource "aws_instance" "app" {
               systemctl enable docker
               systemctl start docker
 
-              # -------------------------------------------------
-              # Clone application repository
-              # -------------------------------------------------
+              usermod -aG docker ubuntu
 
-              cd /opt
+              echo "Docker installation completed" >> /var/log/8byte-bootstrap.log
 
-              rm -rf 8byte-devops-assignment
+              docker --version >> /var/log/8byte-bootstrap.log
 
-              git clone https://github.com/Onkar11092000/8byte-devops-assignment.git 8byte-devops-assignment
-
-              cd /opt/8byte-devops-assignment/app
-
-              # -------------------------------------------------
-              # Build application Docker image
-              # -------------------------------------------------
-
-              docker build -t 8byte-devops-demo:latest .
-
-              # -------------------------------------------------
-              # Run application
-              # -------------------------------------------------
-
-              docker rm -f 8byte-devops-app 2>/dev/null || true
-
-              docker run -d \
-                --name 8byte-devops-app \
-                --restart unless-stopped \
-                -p 3000:3000 \
-                8byte-devops-demo:latest
-
-              echo "8Byte application deployment completed."
-
-              docker ps
-
-              echo "Bootstrap completed successfully." >> /var/log/8byte-bootstrap.log
+              echo "8Byte bootstrap completed" >> /var/log/8byte-bootstrap.log
               EOF
 
   tags = {

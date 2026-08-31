@@ -87,3 +87,8 @@ variable "db_password" {
   type        = string
   sensitive   = true
 }
+
+variable "admin_ip" {
+  description = "Public IP address allowed to SSH into the application server"
+  type        = string
+}
