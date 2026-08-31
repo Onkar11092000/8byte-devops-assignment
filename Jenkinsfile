@@ -5,10 +5,12 @@ options {
     skipDefaultCheckout(true)
     disableConcurrentBuilds()
     timeout(time: 15, unit: 'MINUTES')
+    timestamps()
+    buildDiscarder(logRotator(numToKeepStr: '5'))
 }
 
 environment {
-    APP_NAME = 'eightbyte-app'
+    APP_DIR = 'app'
     IMAGE_NAME = 'eightbyte-app'
     CONTAINER_NAME = 'eightbyte-app'
     APP_PORT = '3000'
@@ -19,32 +21,71 @@ stages {
 
     stage('Checkout') {
         steps {
-            checkout scm
+            deleteDir()
+
+            checkout([
+                $class: 'GitSCM',
+                branches: [[name: '*/main']],
+                userRemoteConfigs: [[
+                    url: 'https://github.com/Onkar11092000/8byte-devops-assignment.git'
+                ]]
+            ])
+        }
+    }
+
+    stage('System Check') {
+        steps {
+            sh '''
+                set -e
+
+                echo "===== SYSTEM ====="
+                echo "Node:"
+                node --version
+
+                echo "NPM:"
+                npm --version
+
+                echo "Docker:"
+                docker --version
+
+                echo "Memory:"
+                free -h
+
+                echo "Disk:"
+                df -h /
+            '''
         }
     }
 
     stage('Test') {
         steps {
-            dir('app') {
+            dir("${APP_DIR}") {
                 sh '''
                     set -e
 
-                    echo "================================="
-                    echo "Node: $(node --version)"
-                    echo "NPM:  $(npm --version)"
-                    echo "================================="
+                    echo "===== APPLICATION TEST ====="
 
-                    echo "Installing dependencies..."
+                    test -f package.json
 
-                    NODE_OPTIONS="--max-old-space-size=256" \
-                    npm ci --no-audit --no-fund --prefer-offline
+                    echo "package.json found"
 
-                    echo "Running tests..."
+                    echo "Installing dependencies with memory-friendly settings..."
 
-                    NODE_OPTIONS="--max-old-space-size=256" \
-                    npm test --if-present
+                    npm ci \
+                        --no-audit \
+                        --no-fund \
+                        --prefer-offline \
+                        --progress=false \
+                        --maxsockets=2
 
-                    echo "Tests completed successfully."
+                    echo "Dependencies installed successfully"
+
+                    if npm run | grep -q "test"; then
+                        echo "Running npm test..."
+                        npm test -- --runInBand
+                    else
+                        echo "No test script configured. Skipping npm test."
+                    fi
                 '''
             }
         }
@@ -55,16 +96,18 @@ stages {
             sh '''
                 set -e
 
-                echo "Building Docker image..."
+                echo "===== DOCKER BUILD ====="
+
+                docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
 
                 docker build \
-                    -t ${IMAGE_NAME}:${BUILD_NUMBER} \
-                    -t ${IMAGE_NAME}:latest \
-                    ./app
+                    --pull=false \
+                    --tag ${IMAGE_NAME}:${BUILD_NUMBER} \
+                    --tag ${IMAGE_NAME}:latest \
+                    .
 
-                echo "Docker image built successfully."
-
-                docker images | grep ${IMAGE_NAME}
+                echo "Docker image created:"
+                docker images ${IMAGE_NAME}
             '''
         }
     }
@@ -74,50 +117,62 @@ stages {
             sh '''
                 set -e
 
-                echo "Stopping existing container if present..."
+                echo "===== DEPLOY ====="
 
                 docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
 
-                echo "Starting new container..."
-
                 docker run -d \
                     --name ${CONTAINER_NAME} \
-                    -p ${HOST_PORT}:${APP_PORT} \
                     --restart unless-stopped \
-                    ${IMAGE_NAME}:latest
+                    -p ${HOST_PORT}:${APP_PORT} \
+                    ${IMAGE_NAME}:${BUILD_NUMBER}
 
-                echo "Container started."
+                echo "Container started"
 
                 sleep 5
 
                 docker ps --filter "name=${CONTAINER_NAME}"
+
+                echo "Container logs:"
+                docker logs --tail 50 ${CONTAINER_NAME}
             '''
         }
     }
 
-    stage('Verify') {
+    stage('Health Check') {
         steps {
             sh '''
                 set -e
 
-                echo "Checking application..."
+                echo "===== HEALTH CHECK ====="
 
-                for i in 1 2 3 4 5; do
-                    if curl -fsS http://localhost:${HOST_PORT}/; then
-                        echo ""
-                        echo "================================="
-                        echo "Application is UP!"
-                        echo "================================="
-                        exit 0
+                SUCCESS=0
+
+                for i in 1 2 3 4 5 6 7 8 9 10
+                do
+                    echo "Health check attempt $i..."
+
+                    if curl --fail --silent --show-error \
+                        http://127.0.0.1:${HOST_PORT}/ > /dev/null
+                    then
+                        SUCCESS=1
+                        echo "Application is healthy!"
+                        break
                     fi
 
-                    echo "Application not ready yet. Retrying..."
-                    sleep 3
+                    sleep 2
                 done
 
-                echo "Application health check failed."
-                docker logs ${CONTAINER_NAME} || true
-                exit 1
+                if [ "$SUCCESS" -ne 1 ]; then
+                    echo "Health check failed."
+                    echo "===== CONTAINER STATUS ====="
+                    docker ps -a --filter "name=${CONTAINER_NAME}"
+
+                    echo "===== CONTAINER LOGS ====="
+                    docker logs ${CONTAINER_NAME} || true
+
+                    exit 1
+                fi
             '''
         }
     }
@@ -125,30 +180,33 @@ stages {
 
 post {
     success {
+        echo '========================================='
         echo '8Byte deployment completed successfully!'
+        echo '========================================='
     }
 
     failure {
+        echo '========================================='
         echo '8Byte deployment failed!'
-        sh '''
-            echo "========== Docker Containers =========="
-            docker ps -a || true
+        echo '========================================='
 
-            echo "========== Application Logs =========="
-            docker logs ${CONTAINER_NAME} 2>/dev/null || true
+        sh '''
+            echo "===== DOCKER STATUS ====="
+            docker ps -a --filter "name=${CONTAINER_NAME}" || true
+
+            echo "===== DOCKER LOGS ====="
+            docker logs --tail 100 ${CONTAINER_NAME} 2>/dev/null || true
+
+            echo "===== MEMORY ====="
+            free -h || true
         '''
     }
 
-    always {
+    cleanup {
         sh '''
-            echo "========== Memory =========="
-            free -h || true
-
-            echo "========== Disk =========="
-            df -h || true
+            docker image prune -f || true
         '''
     }
 }
-```
 
 }
