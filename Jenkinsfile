@@ -1,4 +1,3 @@
-```groovy
 pipeline {
     agent any
 
@@ -16,9 +15,8 @@ pipeline {
                 dir('app') {
                     sh '''
                         set -e
-                        echo "Node: $(node --version)"
-                        echo "NPM: $(npm --version)"
-
+                        node --version
+                        npm --version
                         npm ci --no-audit --no-fund
                         npm test -- --runInBand
                     '''
@@ -31,7 +29,6 @@ pipeline {
                 sh '''
                     set -e
                     docker build -t ${IMAGE_NAME}:latest ./app
-                    docker images ${IMAGE_NAME}:latest
                 '''
             }
         }
@@ -50,8 +47,7 @@ pipeline {
 
                     sleep 5
 
-                    docker ps --filter "name=${CONTAINER_NAME}"
-                    docker logs ${CONTAINER_NAME} --tail 20
+                    docker ps --filter name=${CONTAINER_NAME}
                 '''
             }
         }
@@ -61,22 +57,10 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "Checking application health..."
+                    curl -f ${APP_URL}
 
-                    for i in 1 2 3 4 5; do
-                        if curl -fsS ${APP_URL}; then
-                            echo ""
-                            echo "Application is healthy!"
-                            exit 0
-                        fi
-
-                        echo "Health check failed. Retrying..."
-                        sleep 3
-                    done
-
-                    echo "Application health check failed."
-                    docker logs ${CONTAINER_NAME} --tail 50
-                    exit 1
+                    echo ""
+                    echo "Application is healthy!"
                 '''
             }
         }
@@ -88,9 +72,7 @@ pipeline {
         }
 
         failure {
-            echo '8Byte CI/CD pipeline failed!'
-            sh 'docker logs ${CONTAINER_NAME} --tail 50 || true'
+            echo '8Byte deployment failed!'
         }
     }
 }
-```
