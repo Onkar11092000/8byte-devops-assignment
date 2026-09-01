@@ -2,15 +2,16 @@ pipeline {
 agent any
 
 options {
-    disableConcurrentBuilds()
     timeout(time: 20, unit: 'MINUTES')
     timestamps()
+    disableConcurrentBuilds()
 }
 
 environment {
     APP_NAME = 'eightbyte-app'
     IMAGE_NAME = 'eightbyte-app'
-    CONTAINER_PORT = '3000'
+    CONTAINER_NAME = 'eightbyte-app'
+    APP_PORT = '3000'
     HOST_PORT = '3000'
 }
 
@@ -52,10 +53,7 @@ stages {
                 echo "Disk:"
                 df -h /
 
-                echo "Docker access:"
-                docker info >/dev/null
-
-                echo "===== SYSTEM CHECK COMPLETE ====="
+                echo "========================"
             '''
         }
     }
@@ -69,17 +67,19 @@ stages {
                     echo "===== APPLICATION TEST ====="
 
                     test -f package.json
-
                     echo "package.json found"
+
+                    test -f Dockerfile
+                    echo "Dockerfile found"
 
                     echo "Installing dependencies..."
 
                     npm ci \
-                        --no-audit \
-                        --no-fund \
-                        --prefer-offline \
-                        --progress=false \
-                        --maxsockets=2
+                      --no-audit \
+                      --no-fund \
+                      --prefer-offline \
+                      --progress=false \
+                      --maxsockets=2
 
                     echo "Dependencies installed successfully"
 
@@ -87,7 +87,7 @@ stages {
 
                     npm test -- --runInBand
 
-                    echo "===== TESTS PASSED ====="
+                    echo "Tests completed successfully"
                 '''
             }
         }
@@ -95,69 +95,60 @@ stages {
 
     stage('Docker Build') {
         steps {
-            dir('app') {
-                sh '''
-                    set -e
+            sh '''
+                set -e
 
-                    echo "===== DOCKER BUILD ====="
+                echo "===== DOCKER BUILD ====="
 
-                    test -f Dockerfile
+                test -f app/Dockerfile
+                echo "Dockerfile found at app/Dockerfile"
 
-                    echo "Dockerfile found"
+                docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
 
-                    echo "Removing old container if present..."
+                echo "Building Docker image..."
 
-                    docker rm -f ${APP_NAME} 2>/dev/null || true
+                docker build \
+                    --pull=false \
+                    --tag ${IMAGE_NAME}:${BUILD_NUMBER} \
+                    --tag ${IMAGE_NAME}:latest \
+                    ./app
 
-                    echo "Building Docker image..."
+                echo "Docker image built successfully"
 
-                    docker build \
-                        --pull=false \
-                        --tag ${IMAGE_NAME}:${BUILD_NUMBER} \
-                        --tag ${IMAGE_NAME}:latest \
-                        .
-
-                    echo "Docker image built successfully"
-
-                    docker images ${IMAGE_NAME}
-                '''
-            }
+                docker images ${IMAGE_NAME}
+            '''
         }
     }
 
     stage('Deploy') {
         steps {
-            dir('app') {
-                sh '''
-                    set -e
+            sh '''
+                set -e
 
-                    echo "===== DEPLOY ====="
+                echo "===== DEPLOY ====="
 
-                    echo "Stopping old container..."
+                docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
 
-                    docker rm -f ${APP_NAME} 2>/dev/null || true
+                echo "Starting application container..."
 
-                    echo "Starting new container..."
+                docker run -d \
+                    --name ${CONTAINER_NAME} \
+                    --restart unless-stopped \
+                    -p ${HOST_PORT}:${APP_PORT} \
+                    ${IMAGE_NAME}:latest
 
-                    docker run -d \
-                        --name ${APP_NAME} \
-                        --restart unless-stopped \
-                        -p ${HOST_PORT}:${CONTAINER_PORT} \
-                        ${IMAGE_NAME}:latest
+                echo "Container started"
 
-                    echo "Container started"
+                sleep 5
 
-                    sleep 5
+                echo "===== CONTAINER STATUS ====="
 
-                    echo "===== CONTAINER STATUS ====="
+                docker ps --filter "name=${CONTAINER_NAME}"
 
-                    docker ps --filter name=${APP_NAME}
+                echo "===== CONTAINER LOGS ====="
 
-                    echo "===== CONTAINER LOGS ====="
-
-                    docker logs --tail 50 ${APP_NAME}
-                '''
-            }
+                docker logs --tail 50 ${CONTAINER_NAME}
+            '''
         }
     }
 
@@ -168,65 +159,64 @@ stages {
 
                 echo "===== HEALTH CHECK ====="
 
-                sleep 3
+                echo "Waiting for application..."
 
-                echo "Testing application..."
+                sleep 5
 
-                curl -f http://localhost:${HOST_PORT}/health
+                echo "Checking container..."
+
+                docker ps --filter "name=${CONTAINER_NAME}" --format "{{.Status}}"
+
+                echo "Checking HTTP endpoint..."
+
+                curl --fail --silent --show-error \
+                    --max-time 10 \
+                    http://127.0.0.1:${HOST_PORT}/health
 
                 echo ""
-                echo "Health check successful"
-
-                echo "===== DEPLOYMENT SUCCESSFUL ====="
+                echo "Health check passed successfully"
             '''
         }
     }
 }
 
 post {
-
     success {
-        echo '''
+        echo '========================================='
+        echo '8Byte deployment successful!'
+        echo '========================================='
 
-=========================================
-8Byte deployment successful!
-============================
+        sh '''
+            echo "===== FINAL CONTAINER ====="
+            docker ps --filter "name=${CONTAINER_NAME}"
 
-'''
-}
+            echo "===== FINAL IMAGE ====="
+            docker images ${IMAGE_NAME}
+        '''
+    }
 
     failure {
-        echo '''
-
-=========================================
-8Byte deployment failed!
-========================
-
-'''
+        echo '========================================='
+        echo '8Byte deployment failed!'
+        echo '========================================='
 
         sh '''
             echo "===== DOCKER STATUS ====="
-
-            docker ps -a --filter name=${APP_NAME} || true
+            docker ps -a --filter "name=${CONTAINER_NAME}" || true
 
             echo "===== DOCKER LOGS ====="
-
-            docker logs --tail 100 ${APP_NAME} 2>/dev/null || true
+            docker logs --tail 100 ${CONTAINER_NAME} 2>/dev/null || true
 
             echo "===== MEMORY ====="
-
             free -h
 
             echo "===== DISK ====="
-
             df -h /
         '''
     }
 
     always {
         sh '''
-            echo "===== CLEANUP ====="
-
             docker image prune -f || true
         '''
     }
