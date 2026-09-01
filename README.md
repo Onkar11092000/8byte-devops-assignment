@@ -10,7 +10,7 @@ End-to-end DevOps implementation using AWS, Terraform, Docker, Jenkins and monit
 
 
 
-Work in progress.
+Completed and Successfully Deployed
 
 
 
