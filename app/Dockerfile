@@ -1,18 +1,13 @@
-FROM node:24-alpine
+FROM node:20-alpine
 
 WORKDIR /app
 
 COPY package*.json ./
 
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --no-audit --no-fund
 
-COPY src ./src
-
-ENV NODE_ENV=production
-ENV PORT=3000
+COPY . .
 
 EXPOSE 3000
 
-USER node
-
-CMD ["node", "src/server.js"]
+CMD ["npm", "start"]
