@@ -187,7 +187,6 @@ post {
 
     success {
         echo '''
-```
 
 =========================================
 8Byte deployment successful!
@@ -196,10 +195,8 @@ post {
 '''
 }
 
-```
     failure {
         echo '''
-```
 
 =========================================
 8Byte deployment failed!
@@ -207,7 +204,6 @@ post {
 
 '''
 
-```
         sh '''
             echo "===== DOCKER STATUS ====="
 
